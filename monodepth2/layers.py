@@ -198,6 +198,10 @@ def upsample(x):
     """
     return F.interpolate(x, scale_factor=2, mode="nearest")
 
+def dropout(x, p):
+    """Randomly set some elements in input tensor to 0, with probability p
+    """
+    return F.dropout(x, p=p, training=True)
 
 def get_smooth_loss(disp, img):
     """Computes the smoothness loss for a disparity image

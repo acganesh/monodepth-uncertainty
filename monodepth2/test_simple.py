@@ -51,6 +51,8 @@ def parse_args():
                         help='if set, predicts metric depth instead of disparity. (This only '
                              'makes sense for stereo-trained KITTI models).',
                         action='store_true')
+    parser.add_argument("--dropout_rate", type=float,
+                        help='dropout rate to use during the inference time', default=0.0)
 
     return parser.parse_args()
 
@@ -91,7 +93,7 @@ def test_simple(args):
 
     print("   Loading pretrained decoder")
     depth_decoder = networks.DepthDecoder(
-        num_ch_enc=encoder.num_ch_enc, scales=range(4))
+        num_ch_enc=encoder.num_ch_enc, scales=range(4), dropout_rate=args.dropout_rate)
 
     loaded_dict = torch.load(depth_decoder_path, map_location=device)
     depth_decoder.load_state_dict(loaded_dict)
