@@ -107,11 +107,12 @@ class Trainer:
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
-
+        
+        print("Dropout rate for the model:", self.models["depth"].dropout_rate) 
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
-
+        
         # data
         datasets_dict = {"kitti": datasets.KITTIRAWDataset,
                          "kitti_odom": datasets.KITTIOdomDataset}
