@@ -73,9 +73,8 @@ def visualize(disp, original_height, original_width, title, outpath):
 
 
 def construct_model_ids():
-    # For now we use 20epochs-a.
-    # TODO: Switch this to the model trained with dropout.
-    MODELS = ["20epochs-a"]
+    # For now we use 20epochs-dropout-retry
+    MODELS = ["20epochs-dropout-retry"]
     result = []
     for m in MODELS:
         result.append(f"{m}/models/weights_19")
