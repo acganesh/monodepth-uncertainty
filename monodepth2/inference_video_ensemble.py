@@ -21,13 +21,13 @@ from utils import download_model_if_doesnt_exist, readlines
 
 MODEL_ROOT = "/root/tmp/"
 splits_dir = os.path.join(os.path.dirname(__file__), "splits")
-HEIGHT = 192
-WIDTH = 640
+HEIGHT = 192 # same as orig_height
+WIDTH = 640 # same as orig_width
 
 MODELS = {}
 
-def load_model(model_name, i):
-    if i not in MODELS:
+def load_model(model_name):
+    if model_name not in MODELS:
         model_path = os.path.join(MODEL_ROOT, model_name)
         encoder_path = os.path.join(MODEL_ROOT, model_name, "encoder.pth")
         depth_decoder_path = os.path.join(MODEL_ROOT, model_name, "depth.pth")
@@ -51,7 +51,7 @@ def load_model(model_name, i):
         MODELS[i] = (encoder, depth_decoder)
         print("Model loading complete!")
     else:
-        encoder, depth_decoder = MODELS[i]
+        encoder, depth_decoder = MODELS[model_name]
         
     return encoder, depth_decoder
 
@@ -63,7 +63,7 @@ def predict(encoder, decoder, input_image_pytorch):
         disp = outputs[("disp", 0)]
     return disp
 
-def visualize(disp, original_height, original_width, title, outpath, reverse=True):
+def visualize(ax, disp, original_height, original_width, title, outpath, reverse=True):
     if reverse:
         cmap = 'magma_r'
     else:
@@ -71,27 +71,20 @@ def visualize(disp, original_height, original_width, title, outpath, reverse=Tru
     disp_resized = torch.nn.functional.interpolate(disp,
 	(original_height, original_width), mode="bilinear", align_corners=False)
 
-    # Saving colormapped depth image
     disp_resized_np = disp_resized.squeeze().cpu().numpy()
     vmax = np.percentile(disp_resized_np, 95)
 
-    plt.clf()
-    fig = plt.figure(figsize=(10, 10))
+    ax.imshow(disp_resized_np, cmap=cmap, vmax=vmax)
+    ax.axis('off');
 
-    plt.imshow(disp_resized_np, cmap=cmap, vmax=vmax)
-    plt.title(title, fontsize=22)
-    plt.axis('off');
-    plt.savefig(outpath)
-    plt.close(fig)
-
-def show_img(image, title, outpath):
+def show_img(ax, image, title, outpath):
     image = np.squeeze(image)
     image = np.transpose(image, [1, 2, 0])
-    plt.imshow(image)
-    plt.title(title)
-    plt.axis('off')
-    plt.savefig(outpath)
-    plt.clf()
+    ax.imshow(image)
+    #ax.set_title(title)
+    ax.axis('off')
+    #plt.savefig(outpath)
+    #plt.clf()
 
 
 def construct_model_ids():
@@ -184,10 +177,8 @@ def main(opt):
         assert(all_same(nfiles_all))
         MAX_NUM_FRAMES[scene] = nfiles_all[0]
    
-
-    scene_list = list(SCENES.keys())[3:]
+    scene_list = list(SCENES.keys())
     for scene_ctr, scene_name in tqdm(enumerate(scene_list)):
-    #for scene_name in ["2011_10_03/2011_10_03_drive_0047_sync"]:
         print("Processing Scene Name: ", scene_name)
         print(f"Scene Progress: {scene_ctr}/{len(scene_list)}")
 
@@ -208,7 +199,6 @@ def main(opt):
         var_gif = []
 
         for i, data in enumerate(dataloader):
-            #image_pytorch, orig_height, orig_width = 
             image_pytorch = data[("color", 0, 0)].cuda()
             orig_height = image_pytorch.shape[-2]
             orig_width = image_pytorch.shape[-1]
@@ -216,14 +206,12 @@ def main(opt):
 
             cur_depths = []
 
-            for j, model in enumerate(models):
-                encoder, decoder = load_model(model, j)
+            for _, model in enumerate(models):
+                encoder, decoder = load_model(model)
                 disp = predict(encoder, decoder, image_pytorch)
                 pred_disp, pred_depth = disp_to_depth(disp, opt.min_depth, opt.max_depth)
-                #depth_np = t2n(pred_depth)
                
                 disp_resized_np = resize(pred_disp, orig_height, orig_width)
-                #depth_resized_np = resize(pred_depth, orig_height, orig_width)
                 cur_depths.append(disp_resized_np)
          
             cur_depths = torch.tensor(np.array(cur_depths))
@@ -233,33 +221,24 @@ def main(opt):
             all_means.append(mean_map)
             all_vars.append(var_map)
 
-            mean_path = f"/tmp/results/mean_{i}.png"
-            var_path = f"/tmp/results/var_{i}.png"
-            image_path = f"/tmp/results/image_{i}.png"
+            fig, (ax1, ax2, ax3) = plt.subplots(3)
 
-            #fig, ax = plt.subplots((3, 1))
+            buf = io.BytesIO()
+            show_img(ax3, image_pytorch.cpu().numpy(), f"Image {i}", None)
+            visualize(ax1, mean_map, orig_height, orig_width, "Mean of depth estimation", None, reverse=False)
+            visualize(ax2, var_map, orig_height, orig_width, "Uncertainty of depth estimation (variance)", None, reverse=False)
 
-            mean_buf = io.BytesIO()
-            visualize(mean_map, orig_height, orig_width, "Mean of depth estimation", mean_buf, reverse=False)
-            mean_buf.seek(0)
-            mean_gif.append(imageio.imread(mean_buf))
 
-            var_buf = io.BytesIO()
-            visualize(var_map, orig_height, orig_width, "Uncertainty of depth estimation (variance)", var_buf, reverse=False)
-            var_buf.seek(0)
-            var_gif.append(imageio.imread(var_buf))
-
-            img_buf = io.BytesIO()
-            show_img(image_pytorch.cpu().numpy(), f"Image {i}", img_buf)
-            img_buf.seek(0)
-            img_gif.append(imageio.imread(img_buf))
+            plt.tight_layout()
+            plt.savefig(buf, bbox_inches='tight')
+            buf.seek(0)
+            img_gif.append(imageio.imread(buf))
+            plt.close(fig)
 
             print(f"Frame Progress: {i}")
 
         scene_name_sanitized = scene_name.replace('/', '-')
-        imageio.mimsave(f'/tmp/results/{scene_name_sanitized}-imgs.gif', img_gif, format="GIF", loop=0)
-        imageio.mimsave(f'/tmp/results/{scene_name_sanitized}-mean.gif', mean_gif, format="GIF", loop=0)
-        imageio.mimsave(f'/tmp/results/{scene_name_sanitized}-var.gif', var_gif, format="GIF", loop=0)
+        imageio.mimsave(f'/tmp/results-v2/{scene_name_sanitized}.gif', img_gif, format="GIF", loop=0)
 
 
 if __name__ == '__main__':
