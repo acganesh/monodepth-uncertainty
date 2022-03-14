@@ -215,7 +215,7 @@ def main(opt):
             augs.append(("color_jitter", transforms.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.25)))
             augs.append(("color_jitter", transforms.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.25)))
             augs.append(("blur", transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 0.1))))
-            augs.append(("blur", transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 0.1))))
+            augs.append(("blur", transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 0.1))))
 
             for aug_name, aug in augs:
                 aug_img = aug(image_pytorch)
