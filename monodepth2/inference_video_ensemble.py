@@ -7,6 +7,7 @@ import os
 import numpy as np
 import PIL.Image as pil
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 import torch
 from torch.utils.data import DataLoader
@@ -41,17 +42,16 @@ def load_model(model_name, i):
         loaded_dict = torch.load(depth_decoder_path, map_location='cpu')
         depth_decoder.load_state_dict(loaded_dict)
 
-        encoder.cuda()
-        depth_decoder.cuda()
-
         encoder.eval()
         depth_decoder.eval()
+
+        encoder.cuda()
+        depth_decoder.cuda()
 
         MODELS[i] = (encoder, depth_decoder)
         print("Model loading complete!")
     else:
         encoder, depth_decoder = MODELS[i]
-        print("Using cached model!")
         
     return encoder, depth_decoder
 
@@ -76,13 +76,13 @@ def visualize(disp, original_height, original_width, title, outpath, reverse=Tru
     vmax = np.percentile(disp_resized_np, 95)
 
     plt.clf()
-    plt.figure(figsize=(10, 10))
+    fig = plt.figure(figsize=(10, 10))
 
     plt.imshow(disp_resized_np, cmap=cmap, vmax=vmax)
     plt.title(title, fontsize=22)
     plt.axis('off');
-
     plt.savefig(outpath)
+    plt.close(fig)
 
 def show_img(image, title, outpath):
     image = np.squeeze(image)
@@ -91,6 +91,7 @@ def show_img(image, title, outpath):
     plt.title(title)
     plt.axis('off')
     plt.savefig(outpath)
+    plt.clf()
 
 
 def construct_model_ids():
@@ -111,92 +112,154 @@ def resize(disp, original_height, original_width):
     disp_resized_np = t2n(disp_resized)
     return disp_resized_np
 
+def get_scene(scenes, max_num_frames, eval_filenames, scene_id):
+    scene_filenames = []
+    if scene_id in scenes:
+        N = min(75, max_num_frames[scene_id] - 1)
+        i = scenes[scene_id]
+
+        f0 = eval_filenames[i]
+
+        path0, frame0, side0 = f0.split(' ')
+        for i in range(N):
+            framei = f'{i:10}'
+            fc = f'{path0} {framei} {side0}'
+            scene_filenames.append(fc)
+
+    return N, scene_filenames
+
 def main(opt):
     models = construct_model_ids()
 
-    N = 70
-
     filenames = readlines(os.path.join(splits_dir, opt.eval_split, "test_files.txt"))
-    #filenames = readlines(os.path.join(splits_dir, "odom", "test_files_10.txt"#)
 
-    f0 = filenames[0]
-    filenames_consecutive = []
+    """
+    List of keys in eval scene set:
+    """
+    SCENES = {'2011_09_26/2011_09_26_drive_0002_sync': 0, # the first one we looked at, has biker
+    '2011_09_26/2011_09_26_drive_0009_sync': 25,
+    '2011_09_26/2011_09_26_drive_0013_sync': 50,
+    '2011_09_26/2011_09_26_drive_0020_sync': 75,
+    '2011_09_26/2011_09_26_drive_0023_sync': 100,
+    '2011_09_26/2011_09_26_drive_0027_sync': 125,
+    '2011_09_26/2011_09_26_drive_0029_sync': 150,
+    '2011_09_26/2011_09_26_drive_0036_sync': 175,
+    '2011_09_26/2011_09_26_drive_0046_sync': 200,
+    '2011_09_26/2011_09_26_drive_0048_sync': 225,
+    '2011_09_26/2011_09_26_drive_0052_sync': 247,
+    '2011_09_26/2011_09_26_drive_0056_sync': 272,
+    '2011_09_26/2011_09_26_drive_0059_sync': 297,
+    '2011_09_26/2011_09_26_drive_0064_sync': 322,
+    '2011_09_26/2011_09_26_drive_0084_sync': 347,
+    '2011_09_26/2011_09_26_drive_0086_sync': 372,
+    '2011_09_26/2011_09_26_drive_0093_sync': 397,
+    '2011_09_26/2011_09_26_drive_0096_sync': 422,
+    '2011_09_26/2011_09_26_drive_0101_sync': 447,
+    '2011_09_26/2011_09_26_drive_0106_sync': 472,
+    '2011_09_26/2011_09_26_drive_0117_sync': 497,
+    '2011_09_28/2011_09_28_drive_0002_sync': 522,
+    '2011_09_29/2011_09_29_drive_0071_sync': 547,
+    '2011_09_30/2011_09_30_drive_0016_sync': 572,
+    '2011_09_30/2011_09_30_drive_0018_sync': 597,
+    '2011_09_30/2011_09_30_drive_0027_sync': 622,
+    '2011_10_03/2011_10_03_drive_0027_sync': 647,
+    '2011_10_03/2011_10_03_drive_0047_sync': 672} # Has a bunch of cars on highway
 
-    path0, frame0, side0 = f0.split(' ')
-    for i in range(N):
-        # Can replace 0 with "frame 0" to start at frame 0
-        n = 0 + i
-        framei = f'{n:10}'
-        fc = f'{path0} {framei} {side0}'
-        filenames_consecutive.append(fc)
+    MAX_NUM_FRAMES = {}
 
-    print("Obtained filenames")
-    ds = datasets.KITTIRAWDataset(opt.data_path, filenames_consecutive[:N],
-                                  HEIGHT, WIDTH, [0], 1, is_train=False)
-    dataloader = DataLoader(ds, 1, shuffle=False, num_workers=opt.num_workers, pin_memory=True, drop_last=False)
+    base_path = '/home/acg/ss-monodepth/monodepth2/kitti_data'
+    def all_same(items):
+        return all(x == items[0] for x in items)
 
-    print("Data loader initialized!")
+    for scene in SCENES:
+        scene_base_path = os.path.join(base_path, scene)
+        nfiles_all = []
+        for im in ['image_00', 'image_01', 'image_02', 'image_03']:
+            full_path = os.path.join(scene_base_path, im, "data")
+            files = os.listdir(full_path)
+            numfiles = len(files)
+            nfiles_all.append(numfiles)
 
-    disps = []
-    images = []
-    all_means = []
-    all_vars = []
+        # Ensure that we have the same number of frames across all subdirs.
+        assert(all_same(nfiles_all))
+        MAX_NUM_FRAMES[scene] = nfiles_all[0]
+   
 
-    img_gif = []
-    mean_gif = []
-    var_gif = []
+    scene_list = list(SCENES.keys())[3:]
+    for scene_ctr, scene_name in tqdm(enumerate(scene_list)):
+    #for scene_name in ["2011_10_03/2011_10_03_drive_0047_sync"]:
+        print("Processing Scene Name: ", scene_name)
+        print(f"Scene Progress: {scene_ctr}/{len(scene_list)}")
 
-    for i, data in enumerate(dataloader):
-        #image_pytorch, orig_height, orig_width = 
-        image_pytorch = data[("color", 0, 0)].cuda()
-        orig_height = image_pytorch.shape[-2]
-        orig_width = image_pytorch.shape[-1]
-        images.append(image_pytorch.cpu().numpy())
+        N, scene_filenames = get_scene(SCENES, MAX_NUM_FRAMES, filenames, scene_name)
+        ds = datasets.KITTIRAWDataset(opt.data_path, scene_filenames[:N],
+                                      HEIGHT, WIDTH, [0], 1, is_train=False)
+        dataloader = DataLoader(ds, 1, shuffle=False, num_workers=opt.num_workers, pin_memory=True, drop_last=False)
 
-        cur_depths = []
+        print("Data loader initialized!")
 
-        for j, model in enumerate(models):
-            encoder, decoder = load_model(model, j)
-            disp = predict(encoder, decoder, image_pytorch)
-            pred_disp, pred_depth = disp_to_depth(disp, opt.min_depth, opt.max_depth)
-            #depth_np = t2n(pred_depth)
-           
-            disp_resized_np = resize(pred_disp, orig_height, orig_width)
-            #depth_resized_np = resize(pred_depth, orig_height, orig_width)
-            cur_depths.append(disp_resized_np)
-     
-        cur_depths = torch.tensor(np.array(cur_depths))
-        mean_map = torch.reshape(torch.mean(cur_depths, axis=0), (1, 1, HEIGHT, WIDTH))
-        var_map = torch.reshape(torch.var(cur_depths, axis=0), (1, 1, HEIGHT, WIDTH))
+        disps = []
+        images = []
+        all_means = []
+        all_vars = []
 
-        all_means.append(mean_map)
-        all_vars.append(var_map)
+        img_gif = []
+        mean_gif = []
+        var_gif = []
 
-        mean_path = f"/tmp/results/mean_{i}.png"
-        var_path = f"/tmp/results/var_{i}.png"
-        image_path = f"/tmp/results/image_{i}.png"
+        for i, data in enumerate(dataloader):
+            #image_pytorch, orig_height, orig_width = 
+            image_pytorch = data[("color", 0, 0)].cuda()
+            orig_height = image_pytorch.shape[-2]
+            orig_width = image_pytorch.shape[-1]
+            images.append(image_pytorch.cpu().numpy())
 
-        mean_buf = io.BytesIO()
-        visualize(mean_map, orig_height, orig_width, "Mean of depth estimation", mean_buf, reverse=False)
-        mean_buf.seek(0)
-        mean_gif.append(imageio.imread(mean_buf))
+            cur_depths = []
 
-        var_buf = io.BytesIO()
-        visualize(var_map, orig_height, orig_width, "Uncertainty of depth estimation (variance)", var_buf, reverse=False)
-        var_buf.seek(0)
-        var_gif.append(imageio.imread(var_buf))
+            for j, model in enumerate(models):
+                encoder, decoder = load_model(model, j)
+                disp = predict(encoder, decoder, image_pytorch)
+                pred_disp, pred_depth = disp_to_depth(disp, opt.min_depth, opt.max_depth)
+                #depth_np = t2n(pred_depth)
+               
+                disp_resized_np = resize(pred_disp, orig_height, orig_width)
+                #depth_resized_np = resize(pred_depth, orig_height, orig_width)
+                cur_depths.append(disp_resized_np)
+         
+            cur_depths = torch.tensor(np.array(cur_depths))
+            mean_map = torch.reshape(torch.mean(cur_depths, axis=0), (1, 1, HEIGHT, WIDTH))
+            var_map = torch.reshape(torch.var(cur_depths, axis=0), (1, 1, HEIGHT, WIDTH))
 
-        img_buf = io.BytesIO()
-        show_img(image_pytorch.cpu().numpy(), f"Image {i}", img_buf)
-        img_buf.seek(0)
-        img_gif.append(imageio.imread(img_buf))
+            all_means.append(mean_map)
+            all_vars.append(var_map)
 
-        print(f"Progress: {i}")
+            mean_path = f"/tmp/results/mean_{i}.png"
+            var_path = f"/tmp/results/var_{i}.png"
+            image_path = f"/tmp/results/image_{i}.png"
 
-    imageio.mimsave('/tmp/results/images.gif', img_gif, format="GIF", loop=0)
-    imageio.mimsave('/tmp/results/mean.gif', mean_gif, format="GIF", loop=0)
-    imageio.mimsave('/tmp/results/vars.gif', var_gif, format="GIF", loop=0)
+            #fig, ax = plt.subplots((3, 1))
 
+            mean_buf = io.BytesIO()
+            visualize(mean_map, orig_height, orig_width, "Mean of depth estimation", mean_buf, reverse=False)
+            mean_buf.seek(0)
+            mean_gif.append(imageio.imread(mean_buf))
+
+            var_buf = io.BytesIO()
+            visualize(var_map, orig_height, orig_width, "Uncertainty of depth estimation (variance)", var_buf, reverse=False)
+            var_buf.seek(0)
+            var_gif.append(imageio.imread(var_buf))
+
+            img_buf = io.BytesIO()
+            show_img(image_pytorch.cpu().numpy(), f"Image {i}", img_buf)
+            img_buf.seek(0)
+            img_gif.append(imageio.imread(img_buf))
+
+            print(f"Frame Progress: {i}")
+
+        scene_name_sanitized = scene_name.replace('/', '-')
+        imageio.mimsave(f'/tmp/results/{scene_name_sanitized}-imgs.gif', img_gif, format="GIF", loop=0)
+        imageio.mimsave(f'/tmp/results/{scene_name_sanitized}-mean.gif', mean_gif, format="GIF", loop=0)
+        imageio.mimsave(f'/tmp/results/{scene_name_sanitized}-var.gif', var_gif, format="GIF", loop=0)
 
 
 if __name__ == '__main__':
